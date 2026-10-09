@@ -42,7 +42,7 @@ A Streamlit app that scores a resume for Applicant Tracking Systems (ATS) and su
 | Name | Required | Description |
 |------|----------|-------------|
 | `GEMINI_API_KEY` | Yes | Your Google Gemini API key |
-| `GEMINI_MODEL` | No | Model name (default: `gemini-2.5-flash`) |
+| `GEMINI_MODEL` | No | Model name (default: `gemini-3.8-flash`) |
 
 ## Deploy on Streamlit Community Cloud
 1. Push this repo to GitHub (**never commit your API key**).
