@@ -43,6 +43,7 @@ A Streamlit app that scores a resume for Applicant Tracking Systems (ATS) and su
 |------|----------|-------------|
 | `GEMINI_API_KEY` | Yes | Your Google Gemini API key |
 | `GEMINI_MODEL` | No | Model name (default: `gemini-3.8-flash`) |
+| `GEMINI_FALLBACK_MODEL` | No | Backup model used if the main model stays overloaded (503) |
 
 ## Deploy on Streamlit Community Cloud
 1. Push this repo to GitHub (**never commit your API key**).
@@ -55,6 +56,7 @@ A Streamlit app that scores a resume for Applicant Tracking Systems (ATS) and su
 5. Click **Deploy**.
 
 ## Notes & limitations
+- Temporary Gemini errors (503 high demand, 429 rate limit) are retried automatically with backoff before the app shows an error.
 - The ATS score is an AI-based estimate, not the result of any specific ATS product.
 - Scanned/image-only PDFs can't be read; use a text-based PDF or DOCX.
 - Resume text is sent to the Gemini API for analysis. Don't upload sensitive documents you can't share.
