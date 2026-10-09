@@ -7,7 +7,9 @@ breakdown, missing keywords and concrete improvement suggestions.
 import io
 import json
 import os
+import random
 import re
+import time
 
 import streamlit as st
 from docx import Document
@@ -20,6 +22,8 @@ DEFAULT_MODEL = "gemini-3.8-flash"  # override with GEMINI_MODEL secret/env var
 MAX_FILE_MB = 5
 MAX_CHARS = 30_000  # cap on text sent to the model
 MIN_CHARS = 200  # below this the file is probably scanned / empty
+MAX_ATTEMPTS = 4  # tries per model when Gemini is overloaded (503/429/...)
+RETRYABLE_CODES = {429, 500, 502, 503, 504}
 
 # Weights for the overall score (must sum to 1.0 without a job description).
 WEIGHTS_NO_JD = {
@@ -202,21 +206,46 @@ def normalize_result(data: dict, has_jd: bool) -> dict:
     }
 
 
-def analyze_resume(api_key: str, model: str, resume_text: str, job_description: str = "") -> dict:
+def is_retryable(exc: Exception) -> bool:
+    """True for temporary Gemini errors (overload, rate limit, server error)."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        return code in RETRYABLE_CODES
+    msg = str(exc).upper()
+    return any(t in msg for t in ("UNAVAILABLE", "RESOURCE_EXHAUSTED", "OVERLOADED", "HIGH DEMAND"))
+
+
+def _generate_with_retry(client, model: str, prompt: str, config, sleep=time.sleep):
+    """Call Gemini, retrying with exponential backoff on temporary errors."""
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return client.models.generate_content(model=model, contents=prompt, config=config)
+        except Exception as exc:
+            if attempt == MAX_ATTEMPTS or not is_retryable(exc):
+                raise
+            sleep(2 ** attempt + random.uniform(0, 1))  # ~3s, ~5s, ~9s
+
+
+def analyze_resume(api_key: str, model: str, resume_text: str, job_description: str = "",
+                   fallback_model: str = "") -> dict:
     """Call Gemini and return a validated result dict."""
     from google import genai
     from google.genai import types
 
     client = genai.Client(api_key=api_key)
     prompt = build_prompt(resume_text, job_description)
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.2,
-            response_mime_type="application/json",
-        ),
+    config = types.GenerateContentConfig(
+        temperature=0.2,
+        response_mime_type="application/json",
     )
+    try:
+        response = _generate_with_retry(client, model, prompt, config)
+    except Exception as exc:
+        # If the main model stays overloaded, try the backup model once (if set).
+        if fallback_model and fallback_model != model and is_retryable(exc):
+            response = _generate_with_retry(client, fallback_model, prompt, config)
+        else:
+            raise
     data = parse_model_json(response.text)
     return normalize_result(data, has_jd=bool(job_description.strip()))
 
@@ -303,6 +332,7 @@ def main() -> None:
 
     api_key = get_secret("GEMINI_API_KEY")
     model = get_secret("GEMINI_MODEL", DEFAULT_MODEL)
+    fallback_model = get_secret("GEMINI_FALLBACK_MODEL")  # optional backup model
 
     with st.sidebar:
         st.header("Settings")
@@ -342,9 +372,15 @@ def main() -> None:
             return
         try:
             with st.spinner("Analyzing with Gemini..."):
-                st.session_state["result"] = analyze_resume(api_key, model, text, job_description)
+                st.session_state["result"] = analyze_resume(
+                    api_key, model, text, job_description, fallback_model
+                )
         except Exception as exc:
-            st.error(f"Analysis failed: {exc}")
+            if is_retryable(exc):
+                st.error("Gemini is busy right now (high demand). I retried several times - "
+                         "please wait a minute and click Analyze again.")
+            else:
+                st.error(f"Analysis failed: {exc}")
             return
 
     if "result" in st.session_state:
